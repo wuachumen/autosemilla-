@@ -1,40 +1,30 @@
-"""Import measured Kickmix/verifier outcomes into AutoSemilla's learning ledger.
-
-Input JSONL: one object per tested seed:
-{"seed_id":"...","compiled":true,"verified":true,"verifier_status":"PASS",
- "official_metric":123.4,"ranking_value":-123.4,
- "metrics":{"qubits":64,"toffolis":1000},"report_sha256":"..."}
-
-ranking_value MUST already be normalized so larger is better for that benchmark.
-A failed or missing verifier result is never marked verified.
-"""
-from __future__ import annotations
-import json
+"""Fail-closed ingestion of measured Kickmix/verifier outcomes. Does not run Kickmix."""
+import json,math
 from pathlib import Path
 from .core import Ledger
 
-def ingest_kickmix_jsonl(ledger: Ledger, source: str | Path) -> dict[str,int]:
-    counts={"compiled":0,"verified":0,"rejected":0,"missing_seed":0}
-    with Path(source).open(encoding="utf-8") as stream:
-        for line_no,line in enumerate(stream,1):
+VALID={"PASS","VERIFIED","SUCCESS"}
+def ingest_kickmix_jsonl(ledger:Ledger,source):
+    counts={"compiled":0,"verified":0,"rejected":0,"missing_seed":0,"unknown_seed":0}
+    with Path(source).open(encoding="utf-8") as f:
+        for line_no,line in enumerate(f,1):
             if not line.strip(): continue
-            row=json.loads(line); sid=row.get("seed_id")
-            if not sid:
-                counts["missing_seed"]+=1; continue
-            compiled=bool(row.get("compiled"))
-            verified=compiled and row.get("verified") is True and str(row.get("verifier_status","")).upper() in {"PASS","VERIFIED","SUCCESS"}
+            try: row=json.loads(line)
+            except Exception as exc: raise ValueError(f"invalid JSON at line {line_no}: {exc}") from exc
+            sid=row.get("seed_id")
+            if not sid: counts["missing_seed"]+=1; continue
+            if not ledger.exists(sid): counts["unknown_seed"]+=1; continue
+            compiled=row.get("compiled") is True
+            verified=compiled and row.get("verified") is True and str(row.get("verifier_status","")).upper() in VALID
             state="verified" if verified else ("compiled" if compiled else "rejected")
-            outcome={
-                "compiled":compiled,"verified":verified,
-                "verifier_status":row.get("verifier_status","UNKNOWN"),
-                "official_metric":row.get("official_metric"),
-                "ranking_value":row.get("ranking_value") if verified else None,
-                "metrics":row.get("metrics",{}),
-                "report_sha256":row.get("report_sha256"),
-                "source_line":line_no
-            }
-            if verified and not isinstance(outcome["ranking_value"],(int,float)):
-                raise ValueError(f"line {line_no}: verified rows require numeric ranking_value normalized higher-is-better")
-            ledger.annotate(sid,state,outcome)
-            counts[state]+=1
+            rank=row.get("ranking_value")
+            if verified and (not isinstance(rank,(int,float)) or isinstance(rank,bool) or not math.isfinite(float(rank))):
+                raise ValueError(f"line {line_no}: verified result requires finite ranking_value (higher is better)")
+            digest=row.get("report_sha256")
+            if digest is not None and (not isinstance(digest,str) or len(digest)!=64 or any(c not in "0123456789abcdefABCDEF" for c in digest)):
+                raise ValueError(f"line {line_no}: report_sha256 must be 64 hex characters")
+            outcome={"compiled":compiled,"verified":verified,"verifier_status":row.get("verifier_status","UNKNOWN"),
+              "official_metric":row.get("official_metric"),"ranking_value":rank if verified else None,
+              "metrics":row.get("metrics",{}),"report_sha256":digest,"source_line":line_no}
+            ledger.annotate(sid,state,outcome); counts[state]+=1
     return counts
