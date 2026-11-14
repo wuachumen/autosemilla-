@@ -1,2 +1,2 @@
-"""AutoSemilla: adaptive candidate-seed search for VQCC."""
-__version__ = "3.0.0"
+"""AutoSemilla VQCC consolidated engine."""
+__version__ = "3.1.0"
