@@ -44,11 +44,12 @@ class Ledger:
             db.execute("CREATE INDEX IF NOT EXISTS idx_exp_bench_score ON experiments(benchmark, valid, cheap_score)")
             db.execute("CREATE TABLE IF NOT EXISTS notes (note_id TEXT PRIMARY KEY, kind TEXT, body TEXT, source_hash TEXT, created_at REAL)")
     def connect(self): return sqlite3.connect(self.path, timeout=30)
-    def add(self, seed: Seed, ev: Evaluation):
+    def add(self, seed: Seed, ev: Evaluation) -> bool:
         with self.connect() as db:
-            db.execute("INSERT OR IGNORE INTO experiments VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL)",
+            cur = db.execute("INSERT OR IGNORE INTO experiments VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL)",
                 (seed.id, seed.canonical(), seed.benchmark, seed.strategy, int(ev.valid), ev.cheap_score,
                  json.dumps(ev.features, sort_keys=True), json.dumps(ev.reasons), ev.elapsed_ms, time.time(), "candidate"))
+            return cur.rowcount == 1
     def annotate(self, seed_id: str, promotion: str, outcome: dict | None = None):
         if promotion not in {"candidate", "promoted", "compiled", "verified", "rejected"}: raise ValueError("invalid promotion")
         with self.connect() as db:
@@ -159,6 +160,7 @@ def import_jsonl(ledger: Ledger, source: str | Path) -> int:
         for line in f:
             if not line.strip(): continue
             r=json.loads(line); s=r["seed"]; seed=Seed(s["benchmark"],s["strategy"],s["params"],s["seed"],s.get("generation",0),s.get("parent_id"))
-            ev=Evaluation(seed.id,r["valid"],r["cheap_score"],r["features"],r["reasons"],r["elapsed_ms"]); before=ledger.count(); ledger.add(seed,ev); added+=ledger.count()-before
+            ev=Evaluation(seed.id,r["valid"],r["cheap_score"],r["features"],r["reasons"],r["elapsed_ms"])
+            if ledger.add(seed,ev): added += 1
             if r.get("promotion")!="candidate": ledger.annotate(seed.id,r["promotion"],r.get("outcome"))
     return added
