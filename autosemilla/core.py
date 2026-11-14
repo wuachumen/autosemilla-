@@ -61,9 +61,16 @@ class Ledger:
         with self.connect() as db:
             return db.execute("SELECT COUNT(*) FROM experiments" + (" WHERE benchmark=?" if benchmark else ""), ((benchmark,) if benchmark else ())).fetchone()[0]
     def top(self, benchmark: str, limit: int = 20) -> list[dict]:
+        # Verified results with an explicitly normalized ranking_value outrank proxy-only candidates.
+        # ranking_value must be higher-is-better; caller converts the benchmark's official metric.
         with self.connect() as db:
-            rows=db.execute("SELECT seed_json,cheap_score,features_json,promotion FROM experiments WHERE benchmark=? AND valid=1 ORDER BY cheap_score DESC LIMIT ?",(benchmark,limit)).fetchall()
-        return [{"seed":json.loads(a),"cheap_score":b,"features":json.loads(c),"promotion":d} for a,b,c,d in rows]
+            rows=db.execute("""SELECT seed_json,cheap_score,features_json,promotion,outcome_json
+                FROM experiments WHERE benchmark=? AND valid=1
+                ORDER BY CASE WHEN promotion='verified' AND json_extract(outcome_json,'$.ranking_value') IS NOT NULL THEN 1 ELSE 0 END DESC,
+                CASE WHEN promotion='verified' AND json_extract(outcome_json,'$.ranking_value') IS NOT NULL
+                     THEN CAST(json_extract(outcome_json,'$.ranking_value') AS REAL) ELSE cheap_score END DESC LIMIT ?""",(benchmark,limit)).fetchall()
+        return [{"seed":json.loads(a),"cheap_score":b,"features":json.loads(c),"promotion":d,
+                 "outcome":json.loads(e) if e else None} for a,b,c,d,e in rows]
     def iter_records(self, batch: int = 500):
         with self.connect() as db:
             cur=db.execute("SELECT seed_json,valid,cheap_score,features_json,reasons_json,elapsed_ms,promotion,outcome_json FROM experiments ORDER BY created_at")
