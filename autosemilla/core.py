@@ -64,13 +64,13 @@ class Ledger:
         # Verified results with an explicitly normalized ranking_value outrank proxy-only candidates.
         # ranking_value must be higher-is-better; caller converts the benchmark's official metric.
         with self.connect() as db:
-            rows=db.execute("""SELECT seed_json,cheap_score,features_json,promotion,outcome_json
+            rows=db.execute("""SELECT seed_id,seed_json,cheap_score,features_json,promotion,outcome_json
                 FROM experiments WHERE benchmark=? AND valid=1
                 ORDER BY CASE WHEN promotion='verified' AND json_extract(outcome_json,'$.ranking_value') IS NOT NULL THEN 1 ELSE 0 END DESC,
                 CASE WHEN promotion='verified' AND json_extract(outcome_json,'$.ranking_value') IS NOT NULL
                      THEN CAST(json_extract(outcome_json,'$.ranking_value') AS REAL) ELSE cheap_score END DESC LIMIT ?""",(benchmark,limit)).fetchall()
-        return [{"seed":json.loads(a),"cheap_score":b,"features":json.loads(c),"promotion":d,
-                 "outcome":json.loads(e) if e else None} for a,b,c,d,e in rows]
+        return [{"seed_id":sid,"seed":json.loads(a),"cheap_score":b,"features":json.loads(c),"promotion":d,
+                 "outcome":json.loads(e) if e else None} for sid,a,b,c,d,e in rows]
     def iter_records(self, batch: int = 500):
         with self.connect() as db:
             cur=db.execute("SELECT seed_json,valid,cheap_score,features_json,reasons_json,elapsed_ms,promotion,outcome_json FROM experiments ORDER BY created_at")
@@ -120,7 +120,7 @@ class AdaptiveSearch:
         base=parent["seed"]; params=dict(base["params"]); spec=self._bounds(benchmark)
         key=self.rng.choice(list(spec)); lo,hi=spec[key]; span=max(1,(hi-lo)//8)
         params[key]=max(lo,min(hi,int(params[key])+self.rng.randint(-span,span)))
-        return Seed(benchmark,"exploit",params,self.rng.randrange(2**31),generation,base.get("id"))
+        return Seed(benchmark,"exploit",params,self.rng.randrange(2**31),generation,parent.get("seed_id"))
     def propose(self, benchmark: str, n: int=32) -> list[Seed]:
         if benchmark not in BENCHMARKS: raise ValueError(f"benchmark must be one of {sorted(BENCHMARKS)}")
         if n<1 or n>10000: raise ValueError("n must be 1..10000")
